@@ -46,6 +46,8 @@ def get_free_ai_response(prompt, max_retries=3):
                     api_key = st.secrets.get('HUGGINGFACE_API_KEY', '')
                 except:
                     pass
+                if not api_key:
+                    api_key = os.environ.get('HUGGINGFACE_API_KEY', '')
                 
                 headers = {
                     "Authorization": f"Bearer {api_key}"
@@ -294,7 +296,8 @@ def init_session_state():
         'chat_history': [],
         'premium_calculator': False,
         'claim_assistant': False,
-        'selected_language': 'en'
+        'selected_language': 'en',
+        'pdf_data': None
     }
     
     for key, value in defaults.items():
@@ -649,7 +652,8 @@ Give brief, practical answer in 2-3 lines. Focus on actionable steps."""
                 answer = response['message']['content']
                 
             except Exception as e:
-                answer = f"I'm having trouble connecting to phi3:mini AI. Please try again or contact your nearest bank for insurance guidance. phi3:mini AI Error: Failed to connect to Ollama. Please check that Ollama is downloaded, running and accessible. https://ollama.com/download"
+                # Fall back to Hugging Face API when local Ollama fails
+                answer = get_free_ai_response(user_question)
         else:
             # Use fallback to Hugging Face API
             answer = get_free_ai_response(user_question)
@@ -740,114 +744,34 @@ def generate_insurance_pdf(user_data, advice_content):
 def add_pdf_download_button():
     """Add PDF download functionality"""
     if st.session_state.advice_generated and st.session_state.user_data:
-        
         st.markdown("---")
         st.subheader("📄 Save Your Plan")
         
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            if st.button("📄 Generate & Download PDF Report", type="secondary", use_container_width=True):
-                try:
-                    with st.spinner("Generating PDF report..."):
-                        # Generate PDF
-                        pdf_buffer = generate_insurance_pdf(
-                            st.session_state.user_data, 
-                            st.session_state.advice_content
-                        )
-                        
-                        # Create download
-                        st.download_button(
-                            label="💾 Download Your Insurance Plan (PDF)",
-                            data=pdf_buffer.getvalue(),
-                            file_name=f"Insurance_Plan_{datetime.now().strftime('%Y%m%d')}.pdf",
-                            mime="application/pdf",
-                            type="primary",
-                            use_container_width=True
-                        )
-                        
-                        st.success("📄 PDF generated successfully! Click download button above to save your personalized insurance plan.")
-                        
-                except Exception as e:
-                    st.error(f"Error generating PDF: {str(e)}")
-                    st.info("PDF feature requires: pip install reportlab")
-                    
-        st.info("💡 Tip: Save this PDF and take it to your bank when applying for insurance schemes!")
-
-@st.cache_data(ttl=1800)
-def get_simple_answer(question):
-    """Cache simple chatbot answers"""
-    if 'pmjay' in question or 'ayushman' in question:
-        return "PMJAY provides ₹5 lakh free health coverage. Check eligibility at pmjay.gov.in or call 14555."
-    elif 'pmsby' in question:
-        return "PMSBY costs ₹20/year for ₹2 lakh accident coverage. Apply at any bank with Aadhaar and account."
-    elif 'pmjjby' in question:
-        return "PMJJBY costs ₹436/year for ₹2 lakh life insurance. Available for 18-50 age group through banks."
-    elif 'document' in question:
-        return "Basic documents: Aadhaar card, bank account, mobile number. Specific schemes may need additional documents."
-    else:
-        return "For detailed information, visit your nearest bank branch or check the official government insurance websites."
-
-def insurance_chatbot():
-    """Optimized insurance Q&A chatbot with phi3:mini (lightning fast)"""
-    st.subheader("💬 Insurance Chatbot")
-    
-    recent_chats = st.session_state.chat_history[-5:] if len(st.session_state.chat_history) > 5 else st.session_state.chat_history
-    
-    for chat in recent_chats:
-        st.write(f"**You:** {chat['question']}")
-        st.write(f"**Bot:** {chat['answer']}")
-        st.write("---")
-    
-    user_question = st.text_input("Ask any insurance question:", 
-                                placeholder="e.g., How to apply for PMJAY? What documents needed for PMSBY?")
-    if st.button("Ask Bot") and user_question:
-        
-        if OLLAMA_AVAILABLE:
+        if 'pdf_data' not in st.session_state or st.session_state.pdf_data is None:
             try:
-                prompt = f"""Insurance expert for India. Quick answer:
-
-Q: {user_question}
-
-Give brief, practical answer in 2-3 lines. Focus on actionable steps."""
-
-                response = ollama.chat(
-                    model='phi3:mini',  # Super fast model
-                    messages=[{'role': 'user', 'content': prompt}],
-                    stream=False,
-                    options={
-                        'temperature': 0.3,
-                        'max_tokens': 100,   # Very short for speed
-                        'num_ctx': 512,      # Small context for speed
-                        'num_predict': 100   # Fast prediction
-                    }
+                pdf_buffer = generate_insurance_pdf(
+                    st.session_state.user_data, 
+                    st.session_state.advice_content
                 )
-                
-                answer = response['message']['content']
-                
+                st.session_state.pdf_data = pdf_buffer.getvalue()
             except Exception as e:
-                answer = "I'm having trouble connecting to phi3:mini AI. Please try again or contact your nearest bank for insurance guidance."
-        else:
-            answer = get_simple_answer(user_question.lower())
-        
-        st.session_state.chat_history.append({
-            'question': user_question,
-            'answer': answer,
-            'timestamp': datetime.now().strftime("%H:%M")
-        })
-        
-        if len(st.session_state.chat_history) > 10:
-            st.session_state.chat_history = st.session_state.chat_history[-10:]
-        
-        st.rerun()
+                st.session_state.pdf_data = None
+                st.error(f"Error generating PDF: {str(e)}")
+                st.info("PDF feature requires: pip install reportlab")
+                return
 
-LANGUAGES = {
-    'en': '🇺🇸 English',
-    'hi': '🇮🇳 हिंदी'
-}
-
-def get_text(key, lang='en'):
-    """Get translated text"""
-    return TRANSLATIONS.get(lang, {}).get(key, TRANSLATIONS['en'].get(key, key))
+        if st.session_state.pdf_data is not None:
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                st.download_button(
+                    label="💾 Download Your Insurance Plan (PDF)",
+                    data=st.session_state.pdf_data,
+                    file_name=f"Insurance_Plan_{datetime.now().strftime('%Y%m%d')}.pdf",
+                    mime="application/pdf",
+                    type="primary",
+                    use_container_width=True
+                )
+            st.info("💡 Tip: Save this PDF and take it to your bank when applying for insurance schemes!")
 # 5. Main Optimized Streamlit App
 def main():
     if 'advice_generated' not in st.session_state:
@@ -925,8 +849,11 @@ def main():
             st.success(f"🎉 {get_text('plan_ready', lang)}")
         
             if st.button(f"🔄 {get_text('new_consultation', lang)}", type="secondary"):
-                for key in ['advice_generated', 'user_data', 'advice_content', 'processing']:
-                    st.session_state[key] = False if 'generated' in key or 'processing' in key else {}
+                for key in ['advice_generated', 'user_data', 'advice_content', 'processing', 'pdf_data']:
+                    if key == 'pdf_data':
+                        st.session_state[key] = None
+                    else:
+                        st.session_state[key] = False if 'generated' in key or 'processing' in key else {}
                 st.rerun()
         
             st.markdown(st.session_state.advice_content)
